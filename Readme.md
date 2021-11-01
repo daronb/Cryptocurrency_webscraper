@@ -11,6 +11,18 @@ Install the required modules from the requirements.txt file using:
 ```python
 pip install -r requirements.txt
 ```
+    
+## Documentation
 
----    
-pages: scrapes this many pages or the max number of posts if there are not that many pages
+1. CHANNELS: 
+* These are the Reddit channels that you want to scrape
+2. CHANNEL_CHOICE:
+* The view that you would like to select. 
+* The options are:
+        
+        0. Hot
+        1. Top
+        2. New 
+3. PAGES:
+* Scrapes this many pages or the maximum number of posts if there are not that many pages.
+
