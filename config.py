@@ -1,4 +1,4 @@
-CHANNELS = ['teslamotors']
+CHANNELS = ['bitcoin']
 
 CHANNEL_CHOICE = 0
 
