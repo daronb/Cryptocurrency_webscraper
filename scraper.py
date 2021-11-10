@@ -46,13 +46,13 @@ def get_next_page(current_page):
         return BeautifulSoup(next_page.text, 'html.parser')
 
 
-def get_data(post_input):
+def get_post_data(post_input):
     """
-    Returns the following data from an individual post:
+    Returns the following data from an individual post soup object:
     title, number of comments, number of likes, the date of the post
     Parameters
     ----------
-    post_input : the post to get the data from
+    post_input : the post soup object to get the data from
 
     Returns
     -------
@@ -67,6 +67,38 @@ def get_data(post_input):
     post_date = post_input.find('time').attrs['datetime'].split('T')[0]
 
     return title, comments, likes, post_date
+
+
+def get_user_data(user_url):
+    user_data = []
+
+    for sort in ['new', 'top']:
+        comment_data = []
+        post_data = []
+
+        page = requests.get(f'{user_url}/comments/?sort={sort}', headers=HEADERS)
+        soup = BeautifulSoup(page.content, 'html.parser')
+
+        for comment in soup.select('div[class*="thing"]'):
+            title = comment.find(class_='title').text
+            author = comment.select('a[class*="author"]')[0].text
+            thread = comment.find(class_='subreddit hover').text
+            # points = comment.find(class_='score unvoted').text
+            date = comment.find(class_='live-timestamp').attrs['datetime'].split('T')[0]
+            text = comment.find(class_='md').find('p').text
+            comment_data.append((title, author, thread, date, text))
+
+        page = requests.get(f'{user_url}/submitted/?sort={sort}', headers=HEADERS)
+        soup = BeautifulSoup(page.content, 'html.parser')
+
+        for post in soup.select('div[class*="thing"]'):
+            thread = post.find(class_='subreddit hover may-blank').text
+            post_data.append(tuple(list(get_post_data(post)) + [thread]))
+
+        user_data.append((f'{sort} comments', comment_data))
+        user_data.append((f'{sort} posts', post_data))
+
+    return user_data
 
 
 def get_comments(post_input):
@@ -90,8 +122,10 @@ def get_comments(post_input):
 
     return comments
 
+
 def main():
     data = list()
+    users = dict()
 
     for index, channel in enumerate(CHANNELS):
         data.append([])
@@ -108,13 +142,14 @@ def main():
                 if not_promotion and not_announcement:
                     # go into post and get info about the comments
                     post_comments = get_comments(post)
-                    post_data = list(get_data(post))
+                    post_data = list(get_post_data(post))
                     post_data.append(post_comments)
-                    # print(post_comments)
-                    # print(post_data)
                     data[index].append(post_data)
-                    # print(data[index])
-                    break
+
+                    username = post.select('a[class*="author"]')[0].text
+                    if username not in users.keys():
+                        users[username] = get_user_data(post.select('a[class*="author"]')[0].attrs['href'])
+
             soup = get_next_page(soup)
             counter += 1
 
