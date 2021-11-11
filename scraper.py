@@ -133,11 +133,16 @@ def get_comments(post_input):
     comments_page_req = requests.get(BASE_URL + comments_page_link[1:], headers=HEADERS)
     comments_page = BeautifulSoup(comments_page_req.text, 'html.parser')
 
-    comments_area = comments_page.find('div', class_='commentarea').find('div', class_='sitetable nestedlisting')
+    comments_area_main = comments_page.find('div', class_='commentarea')
+    comments_area = comments_area_main.find('div', class_='sitetable nestedlisting')
+
     comments = {}
     for index, comment in enumerate(comments_area.select('div[class*="thing"]')):
         if comment.attrs['class'][-1] == 'morechildren':
             continue
+        if 'deleted' in comment.attrs['class']:
+            continue
+
         author = comment.select('a[class*="author"]')[0].text
         comment_time = comment.find('time').attrs['datetime']
         sub_comments = comment.find('a', class_="numchildren").text.split()[0].replace('(', '')
@@ -190,3 +195,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+    pass
