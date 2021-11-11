@@ -129,20 +129,17 @@ def get_comments(post_input):
     -------
     dictionary containing comment information
     """
-    comments_page_link = post_input.find('p', class_="title").find('a').attrs['href']
-    comments_page_req = requests.get(BASE_URL + comments_page_link[1:], headers=HEADERS)
+    comments_page_link = post_input.find('a', class_="bylink comments may-blank").attrs['href']
+    comments_page_req = requests.get(comments_page_link, headers=HEADERS)
     comments_page = BeautifulSoup(comments_page_req.text, 'html.parser')
-
-    comments_area_main = comments_page.find('div', class_='commentarea')
-    comments_area = comments_area_main.find('div', class_='sitetable nestedlisting')
+    comments_area = comments_page.find('div', class_='commentarea').find('div', class_='sitetable nestedlisting')
 
     comments = {}
     for index, comment in enumerate(comments_area.select('div[class*="thing"]')):
-        if comment.attrs['class'][-1] == 'morechildren':
+        if comment.attrs['class'][-1] in ['morechildren', 'morerecursion']:
             continue
         if 'deleted' in comment.attrs['class']:
             continue
-
         author = comment.select('a[class*="author"]')[0].text
         comment_time = comment.find('time').attrs['datetime']
         sub_comments = comment.find('a', class_="numchildren").text.split()[0].replace('(', '')
@@ -157,36 +154,29 @@ def get_comments(post_input):
 def main():
     channel_data = {}
     users = {}
-    # iterating over the channels configured
+
     for index, channel in enumerate(CHANNELS):
         posts_data = []
-        # sets up starting URL
+
         full_url = f'{BASE_URL}r/{channel}/{CHANNEL_OPTION[CHANNEL_CHOICE]}'
         page = requests.get(full_url, headers=HEADERS)
         soup = BeautifulSoup(page.content, 'html.parser')
 
         counter = 0
-        # iterates over the number of pages specified in the config.py file
         while counter < PAGES:
-            # iterates over the posts in each page
             for post in soup.select('div[class*="thing"]'):
-                # checks that the post is not an announcement or promotion
                 not_promotion = post.find('span', class_="promoted-span") is None
                 not_announcement = post.find('span', class_="stickied-tagline") is None
                 if not_promotion and not_announcement:
-                    # gets the comment data
                     post_comments = get_comments(post)
-                    # gets the post data
                     post_data = get_post_data(post)
                     post_data['post comments'] = post_comments
                     posts_data.append(post_data)
 
-                    # gets the user data
                     username = post.select('a[class*="author"]')[0].text
                     if username not in users.keys():
                         users[username] = get_user_data(post.select('a[class*="author"]')[0].attrs['href'])
 
-            # gets the soup object for the next page to scrape
             soup = get_next_page(soup)
             counter += 1
 
@@ -195,4 +185,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    pass
