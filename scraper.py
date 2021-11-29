@@ -3,6 +3,9 @@ import config as CFG
 
 from bs4 import BeautifulSoup
 import requests
+from selenium import webdriver
+# from webdrivermanager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
 
 """
 settings:
@@ -86,6 +89,24 @@ def get_user_data(user_url):
     """
     user_data = {}
 
+    page = requests.get(user_url, headers=HEADERS)
+    soup = BeautifulSoup(page.content, 'html.parser')
+
+    if soup.find(class_='pagename selected').text == 'over 18?':
+        driver = webdriver.Chrome(executable_path=r'C:\bin\chromedriver.exe')
+        driver.get(user_url)
+        driver.find_element_by_xpath("//div[@class='buttons']//button[@value='yes']").click()
+        html = driver.page_source
+        soup = BeautifulSoup(html)
+
+    post_karma = soup.find(class_='karma').text
+    comment_karma = soup.find(class_='karma comment-karma').text
+    age = soup.find(class_='age').contents[1].attrs['datetime']
+
+    user_data['post karma'] = post_karma
+    user_data['comment karma'] = comment_karma
+    user_data['age'] = age
+
     for sort in ['new', 'top']:
         comment_data = []
         post_data = []
@@ -98,7 +119,10 @@ def get_user_data(user_url):
             author = comment.select('a[class*="author"]')[0].text
             thread = comment.find(class_='subreddit hover').text
             date = comment.find(class_='live-timestamp').attrs['datetime'].split('T')[0]
-            text = comment.find(class_='md').find('p').text
+            if comment.find(class_='md').find('p'):
+                text = comment.find(class_='md').find('p').text
+            else:
+                text = comment.find(class_='md').select('li')[0].text
             comment_data.append({'title': title, 'author': author, 'thread': thread, 'date': date, 'text': text})
 
         page = requests.get(f'{user_url}/submitted/?sort={sort}', headers=HEADERS)
@@ -140,7 +164,7 @@ def get_comments(post_input):
             continue
         if 'deleted' in comment.attrs['class']:
             continue
-        author = comment.select('a[class*="author"]')[0].text
+        author = comment.select('a[class*="author"]')[0].text if comment.select('a[class*="author"]') else 'deleted'
         comment_time = comment.find('time').attrs['datetime']
         sub_comments = comment.find('a', class_="numchildren").text.split()[0].replace('(', '')
         comment_ind = {'author': author,
