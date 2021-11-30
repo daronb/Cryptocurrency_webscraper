@@ -4,8 +4,10 @@ import re
 import pymysql.cursors
 from bs4 import BeautifulSoup
 import requests
+from selenium import webdriver
+# from webdrivermanager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
 
-import json
 
 """
 settings:
@@ -25,98 +27,129 @@ CHANNEL_OPTION = ['top', 'new']
 CHANNELS = CFG.CHANNELS
 CHANNEL_CHOICE = CFG.CHANNEL_CHOICE
 PAGES = CFG.PAGES
+# CHROME_PATH = CFG.CHROME_PATH
 
 COMMENT_ID_SPLIT = -1
 
 
-USER_NAME = USER_NAME
+USER_NAME = 'root'
 PASSWORD = PASSWORD
 
-def user_insert_to_sql(data):
-    connection = pymysql.connect(host='localhost',
-                                 user= USER_NAME,
-                                 password= PASSWORD,
-                                 database='reddit_data')
-    with connection:
-        with connection.cursor() as cursor:
-            fields = 'user_name, post_karma, comment_karma, date_joined'
-            place_holder = ', '.join(["" + '%s' + ""] * len(fields.split(',')))
-
-            sql = f"INSERT INTO reddit_data.user ({fields}) VALUES ({place_holder});"
-
-            for k in data.keys():
-                user_name = k
-
-            vals = (user_name,
-                    10,
-                    20,
-                    '2021-11-28')
-
-            cursor.execute(sql, vals)
-
-            connection.commit()
-            user_id = cursor.lastrowid
-            print(f'created user {user_id}')
-
-            return user_id
 
 
-def insert_to_sql(data):
+def user_insert_to_sql(data,index, connection):
+
+    with connection.cursor() as cursor:
+
+        fields = 'user_name, post_karma, comment_karma, date_joined'
+
+        place_holder = ', '.join(["" + '%s' + ""] * len(fields.split(',')))
+
+        sql = f"""INSERT INTO reddit_data.user ({fields}) VALUES ({place_holder})
+        on duplicate key update post_karma = values(post_karma) and comment_karma = values(comment_karma);"""
+
+        user_name = list(data.keys())[index]
+
+        vals = (user_name,
+                data[user_name]['post karma'],
+                data[user_name]['comment karma'],
+                data[user_name]['age'])
+
+        cursor.execute(sql, vals)
+
+        connection.commit()
+        user_id = cursor.lastrowid
+
+        if user_id == 0:
+
+            get_user_id_sql = f"select user_id from reddit_data.user where user_name = '{user_name}';"
+            cursor.execute(get_user_id_sql)
+            user_id = cursor.fetchone()[0]
+
+        print(f'created user {user_id}')
+
+        return user_id
+
+
+def insert_user_post_to_sql(data, user_id, connection):
+
     print('starting insert process')
-    connection = pymysql.connect(host='localhost',
-                                 user= USER_NAME,
-                                 password= PASSWORD,
-                                 database='reddit_data')
-    with connection:
-        with connection.cursor() as cursor:
-            fields = 'user_id, title, likes, comments, date_posted, sub_reddit, post_source, post_option'
-            place_holder = ', '.join(["" + '%s' + ""] * len(fields.split(',')))
+    with connection.cursor() as cursor:
 
-            sql = f"INSERT INTO reddit_data.post ({fields}) VALUES ({place_holder});"
+        fields = 'user_id, title, likes, comments, date_posted, sub_reddit, post_source, post_option'
+        place_holder = ', '.join(["" + '%s' + ""] * len(fields.split(',')))
 
-            vals = (int(data['user_id']), data['title'],
-                    int(data['likes']), int(data['comments']),
-                    data['post date'], data['subreddit'], 'user', 'top')
+        sql = f"""INSERT INTO reddit_data.post ({fields}) VALUES ({place_holder}) 
+        on duplicate key update likes = values(likes) and comments = values(comments);"""
+
+        user_name = list(data.keys())[0]
+
+        for post in data[user_name]['new posts']:
+
+            vals = (user_id, post['title'],
+                    int(post['likes']), int(post['comments']),
+                    post['post date'], post['subreddit'], post['post_source'], post['post_option'])
 
             cursor.execute(sql, vals)
-            connection.commit()
+        connection.commit()
 
-            post_id = cursor.lastrowid
-            print(f'inserted post {post_id}')
+        for post in data[user_name]['top posts']:
+            vals = (user_id, post['title'],
+                    int(post['likes']), int(post['comments']),
+                    post['post date'], post['subreddit'], post['post_source'], post['post_option'])
 
-            comment_fields = 'post_id, author, comment_date, sub_comments, r_comment_parent_id, child_comment_id, comment_post_id'
-            comment_place_holder = ', '.join(["" + '%s' + ""] * len(comment_fields.split(',')))
+            cursor.execute(sql, vals)
+        connection.commit()
 
-            comment_sql = f"INSERT INTO reddit_data.comment ({comment_fields}) VALUES ({comment_place_holder});"
-            comment_data = data['post comments']
 
-            for comment in comment_data:
-                comment = comment_data[comment]
-                comment_vals = (post_id, comment['author'],
-                                comment['comment time'], int(comment['sub comments']),
-                                comment['parent_comment_id'], comment['child_comment_id'],
-                                comment['comment_post_id'])
+def insert_to_sql(data, connection):
 
-                cursor.execute(comment_sql, comment_vals)
-                connection.commit()
+    print('starting insert process')
+    with connection.cursor() as cursor:
 
-                update_sql = """update reddit_data.comment a 
-                        join reddit_data.comment b on a.r_comment_parent_id = b.child_comment_id
-                        set a.parent_comment_id = b.comments_id
-                        where a.comments_id > 0;"""
+        fields = 'user_id, title, likes, comments, date_posted, sub_reddit, post_source, post_option'
+        place_holder = ', '.join(["" + '%s' + ""] * len(fields.split(',')))
 
-                update_sql_remove_r_id = """update reddit_data.comment a
-                                        set a.r_comment_parent_id = Null, 
-                                        a.child_comment_id = Null,
-                                        a.comment_post_id = Null
-                                        where a.r_comment_parent_id is not Null ;"""
+        sql = f"""INSERT INTO reddit_data.post ({fields}) VALUES ({place_holder}) 
+        on duplicate key update likes = values(likes), comments = values(comments),post_id=LAST_INSERT_ID(post_id);"""
 
-                cursor.execute(update_sql)
-                connection.commit()
-                # cursor.execute(update_sql_remove_r_id)
-                # connection.commit()
+        vals = (int(data['user_id']), data['title'],
+                int(data['likes']), int(data['comments']),
+                data['post date'], data['subreddit'], data['post_source'], data['post_option'])
 
-            print(f'inserted comments for post {post_id}')
+        cursor.execute(sql, vals)
+        connection.commit()
+
+        post_id = cursor.lastrowid
+        print(f'inserted post {post_id}')
+
+        comment_fields = 'post_id, author, text, comment_date, sub_comments, reddit_parent_id, reddit_comment_id, reddit_post_id'
+        comment_place_holder = ', '.join(["" + '%s' + ""] * len(comment_fields.split(',')))
+
+        comment_sql = f"""INSERT INTO reddit_data.comment ({comment_fields}) VALUES ({comment_place_holder}) 
+        on duplicate key update sub_comments = values(sub_comments);"""
+
+        comment_data = data['post comments']
+
+        for comment in comment_data:
+            comment = comment_data[comment]
+            comment_vals = (post_id, comment['author'], comment['text'],
+                            comment['comment time'], int(comment['sub comments']),
+                            comment['parent_comment_id'], comment['child_comment_id'],
+                            comment['comment_post_id'])
+
+            cursor.execute(comment_sql, comment_vals)
+        connection.commit()
+
+        update_sql = """update reddit_data.comment a 
+                join reddit_data.comment b on a.reddit_parent_id = b.reddit_comment_id
+                set a.parent_comment_id = b.comments_id
+                where a.comments_id > 0;"""
+
+        cursor.execute(update_sql)
+        connection.commit()
+
+        print(f'inserted comments for post {post_id}')
 
 
 def get_next_page(current_page):
@@ -161,7 +194,7 @@ def get_post_data(post_input):
     comments = 0 if comments == "comment" else comments
     likes = post_input.find("div", class_="score likes").text
     likes = "None" if likes == "•" else likes
-    post_date = post_input.find('time').attrs['datetime'].split('T')[0]
+    post_date = post_input.find('time').attrs['datetime']
 
     return {'title': title, 'comments': comments, 'likes': likes, 'post date': post_date}
 
@@ -181,29 +214,60 @@ def get_user_data(user_url):
     """
     user_data = {}
 
+    page = requests.get(user_url, headers=HEADERS)
+    soup = BeautifulSoup(page.content, 'html.parser')
+
+    if soup.find(class_='pagename selected').text == 'over 18?':
+        driver = webdriver.Chrome()
+        driver.get(user_url)
+        driver.find_element_by_xpath("//div[@class='buttons']//button[@value='yes']").click()
+        html = driver.page_source
+        soup = BeautifulSoup(html)
+
+    post_karma = soup.find(class_='karma').text
+    comment_karma = soup.find(class_='karma comment-karma').text
+    age = soup.find(class_='age').contents[1].attrs['datetime']
+
+    user_data['post karma'] = int(post_karma.replace(',', ''))
+    user_data['comment karma'] = int(comment_karma.replace(',', ''))
+    user_data['age'] = age
+
     for sort in ['new', 'top']:
-        comment_data = []
+        # comment_data = []
         post_data = []
 
-        page = requests.get(f'{user_url}/comments/?sort={sort}', headers=HEADERS)
-        soup = BeautifulSoup(page.content, 'html.parser')
+        # page = requests.get(f'{user_url}/comments/?sort={sort}', headers=HEADERS)
+        # soup = BeautifulSoup(page.content, 'html.parser')
 
-        for comment in soup.select('div[class*="thing"]'):
-            title = comment.find(class_='title').text
-            author = comment.select('a[class*="author"]')[0].text
-            thread = comment.find(class_='subreddit hover').text
-            date = comment.find(class_='live-timestamp').attrs['datetime'].split('T')[0]
-            text = comment.find(class_='md').find('p').text
-            comment_data.append({'title': title, 'author': author, 'thread': thread, 'date': date, 'text': text})
+        # for comment in soup.select('div[class*="thing"]'):
+        #     title = comment.find(class_='title').text
+        #     author = comment.select('a[class*="author"]')[0].text
+        #     thread = comment.find(class_='subreddit hover').text
+        #     date = comment.find(class_='live-timestamp').attrs['datetime'].split('T')[0]
+        #     if comment.find(class_='md').find('p'):
+        #         text = comment.find(class_='md').find('p').text
+        #     else:
+        #         text = comment.find(class_='md').select('li')[0].text
+        #     comment_data.append({'title': title, 'author': author, 'thread': thread, 'date': date, 'text': text})
 
         page = requests.get(f'{user_url}/submitted/?sort={sort}', headers=HEADERS)
         soup = BeautifulSoup(page.content, 'html.parser')
 
+        if soup.find(class_='pagename selected').text == 'over 18?':
+            driver = webdriver.Chrome()
+            driver.get(user_url)
+            driver.find_element_by_xpath("//div[@class='buttons']//button[@value='yes']").click()
+            html = driver.page_source
+            soup = BeautifulSoup(html)
+
         for post in soup.select('div[class*="thing"]'):
-            thread = post.find(class_='subreddit hover may-blank').text
+            subreddit = post.find(class_='subreddit hover may-blank').text
             last_post_data = get_post_data(post)
-            last_post_data['thread'] = thread
+            last_post_data['post_source'] = 'user'
+            last_post_data['post_option'] = sort
+            last_post_data['subreddit'] = subreddit
             post_data.append(last_post_data)
+
 
         # user_data[f'{sort} comments'] = comment_data
         user_data[f'{sort} posts'] = post_data
@@ -242,14 +306,18 @@ def get_comments(post_input):
 
         parent_id = re.split('[-_]', comment.parent.attrs['id'])[COMMENT_ID_SPLIT]
         child_id = re.split('[-_]', comment.attrs['id'])[COMMENT_ID_SPLIT]
-        if comment.select('a[class*="author"]'):
-            author = comment.select('a[class*="author"]')[0].text
-        else:
-            author = 'deleted'
+
+        author = comment.select('a[class*="author"]')[0].text if comment.select('a[class*="author"]') else 'deleted'
+
         comment_time = comment.find('time').attrs['datetime']
         sub_comments = comment.find('a', class_="numchildren").text.split()[0].replace('(', '')
+        if comment.find(class_='md').find('p'):
+            text = comment.find(class_='md').find('p').text
+        else:
+            text = comment.find(class_='md').select('li')[0].text
 
         comment_ind = {'author': author,
+                       'text': text,
                        'comment time': comment_time,
                        'sub comments': sub_comments,
                        'parent_comment_id': parent_id,
@@ -261,7 +329,8 @@ def get_comments(post_input):
     return comments
 
 
-def main():
+def main(connection):
+
     channel_data = {}
     users = {}
 
@@ -273,6 +342,7 @@ def main():
         soup = BeautifulSoup(page.content, 'html.parser')
 
         counter = 0
+        i = 0
         while counter < PAGES:
             for post in soup.select('div[class*="thing"]'):
                 not_promotion = post.find('span', class_="promoted-span") is None
@@ -282,12 +352,10 @@ def main():
                     username = post.select('a[class*="author"]')[0].text
                     if username not in users.keys():
                         users[username] = get_user_data(post.select('a[class*="author"]')[0].attrs['href'])
-                        user_id = user_insert_to_sql(users)
+                        user_id = user_insert_to_sql(users,i, connection)
+                        insert_user_post_to_sql(users, user_id, connection)
+
                     else:
-                        connection = pymysql.connect(host='localhost',
-                                                     user=USER_NAME,
-                                                     password=PASSWORD,
-                                                     database='reddit_data')
 
                         with connection.cursor() as cursor:
                             # Read a single record
@@ -302,12 +370,14 @@ def main():
                     post_data['subreddit'] = channel
                     post_data['user_id'] = user_id
                     post_data['post comments'] = post_comments
+                    post_data['post_option'] = CHANNEL_OPTION[CHANNEL_CHOICE]
+                    post_data['post_source'] = 'subreddit'
 
                     posts_data.append(post_data)
 
-                    insert_to_sql(post_data)
+                    insert_to_sql(post_data, connection)
 
-
+                    i += 1
             soup = get_next_page(soup)
             counter += 1
 
@@ -315,4 +385,12 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+
+    connection = pymysql.connect(host='localhost',
+                                 user=USER_NAME,
+                                 password=PASSWORD,
+                                 database='reddit_data')
+
+    main(connection)
+
+    connection.close()
