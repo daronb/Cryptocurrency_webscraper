@@ -33,7 +33,7 @@ COMMENT_ID_SPLIT = -1
 
 
 USER_NAME = 'root'
-PASSWORD = PASSWORD
+PASSWORD = 'ALLofme12'
 
 
 
@@ -46,7 +46,7 @@ def user_insert_to_sql(data,index, connection):
         place_holder = ', '.join(["" + '%s' + ""] * len(fields.split(',')))
 
         sql = f"""INSERT INTO reddit_data.user ({fields}) VALUES ({place_holder})
-        on duplicate key update post_karma = values(post_karma) and comment_karma = values(comment_karma);"""
+        on duplicate key update post_karma = values(post_karma), comment_karma = values(comment_karma);"""
 
         user_name = list(data.keys())[index]
 
@@ -80,9 +80,9 @@ def insert_user_post_to_sql(data, user_id, connection):
         place_holder = ', '.join(["" + '%s' + ""] * len(fields.split(',')))
 
         sql = f"""INSERT INTO reddit_data.post ({fields}) VALUES ({place_holder}) 
-        on duplicate key update likes = values(likes) and comments = values(comments);"""
+        on duplicate key update likes = values(likes), comments = values(comments);"""
 
-        user_name = list(data.keys())[0]
+        user_name = list(data.keys())[-1]
 
         for post in data[user_name]['new posts']:
 
@@ -261,7 +261,7 @@ def get_user_data(user_url):
             soup = BeautifulSoup(html)
 
         for post in soup.select('div[class*="thing"]'):
-            subreddit = post.find(class_='subreddit hover may-blank').text
+            subreddit = post.find(class_='subreddit hover may-blank').text if post.find(class_='subreddit hover may-blank') else 'missing'
             last_post_data = get_post_data(post)
             last_post_data['post_source'] = 'user'
             last_post_data['post_option'] = sort
@@ -313,8 +313,12 @@ def get_comments(post_input):
         sub_comments = comment.find('a', class_="numchildren").text.split()[0].replace('(', '')
         if comment.find(class_='md').find('p'):
             text = comment.find(class_='md').find('p').text
-        else:
+        elif comment.find(class_='md').select('li'):
             text = comment.find(class_='md').select('li')[0].text
+        elif comment.find(class_='md').find('h1'):
+            comment.find(class_='md').find('h1').text
+        else:
+            text = 'format not supported'
 
         comment_ind = {'author': author,
                        'text': text,
@@ -352,7 +356,7 @@ def main(connection):
                     username = post.select('a[class*="author"]')[0].text
                     if username not in users.keys():
                         users[username] = get_user_data(post.select('a[class*="author"]')[0].attrs['href'])
-                        user_id = user_insert_to_sql(users,i, connection)
+                        user_id = user_insert_to_sql(users, i, connection)
                         insert_user_post_to_sql(users, user_id, connection)
 
                     else:
