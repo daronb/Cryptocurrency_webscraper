@@ -37,7 +37,7 @@ PASSWORD = 'ALLofme12'
 
 
 
-def user_insert_to_sql(data,index, connection):
+def user_insert_to_sql(data, connection):
 
     with connection.cursor() as cursor:
 
@@ -48,7 +48,7 @@ def user_insert_to_sql(data,index, connection):
         sql = f"""INSERT INTO reddit_data.user ({fields}) VALUES ({place_holder})
         on duplicate key update post_karma = values(post_karma), comment_karma = values(comment_karma);"""
 
-        user_name = list(data.keys())[index]
+        user_name = list(data.keys())[-1]
 
         vals = (user_name,
                 data[user_name]['post karma'],
@@ -313,10 +313,6 @@ def get_comments(post_input):
         sub_comments = comment.find('a', class_="numchildren").text.split()[0].replace('(', '')
         if comment.find(class_='md').find('p'):
             text = comment.find(class_='md').find('p').text
-        elif comment.find(class_='md').select('li'):
-            text = comment.find(class_='md').select('li')[0].text
-        elif comment.find(class_='md').find('h1'):
-            comment.find(class_='md').find('h1').text
         else:
             text = 'format not supported'
 
@@ -346,7 +342,6 @@ def main(connection):
         soup = BeautifulSoup(page.content, 'html.parser')
 
         counter = 0
-        i = 0
         while counter < PAGES:
             for post in soup.select('div[class*="thing"]'):
                 not_promotion = post.find('span', class_="promoted-span") is None
@@ -356,7 +351,7 @@ def main(connection):
                     username = post.select('a[class*="author"]')[0].text
                     if username not in users.keys():
                         users[username] = get_user_data(post.select('a[class*="author"]')[0].attrs['href'])
-                        user_id = user_insert_to_sql(users, i, connection)
+                        user_id = user_insert_to_sql(users, connection)
                         insert_user_post_to_sql(users, user_id, connection)
 
                     else:
@@ -381,7 +376,6 @@ def main(connection):
 
                     insert_to_sql(post_data, connection)
 
-                    i += 1
             soup = get_next_page(soup)
             counter += 1
 
