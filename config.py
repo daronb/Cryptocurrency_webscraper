@@ -4,7 +4,7 @@ import platform
 
 CHANNELS = ['bitcoin']
 
-CHANNEL_CHOICE = 0
+CHANNEL_CHOICE = 1
 
 PAGES = 1
 

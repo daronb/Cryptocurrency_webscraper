@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS `reddit_data`.`comment` (
   `post_id` INT NOT NULL,
   `author` VARCHAR(45) NOT NULL,
   `text` TEXT NOT NULL,
+  `points` INT,
   `comment_date` DATETIME NOT NULL,
   `sub_comments` INT NOT NULL,
   `parent_comment_id` int NULL,
