@@ -1,13 +1,11 @@
 import textwrap
 import time
-import config as cfg
 import re
 import pymysql.cursors
 from bs4 import BeautifulSoup
 import requests
 from selenium import webdriver
-# from webdrivermanager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
+import sys
 import argparse
 
 
@@ -15,8 +13,6 @@ import argparse
 BASE_URL = "https://old.reddit.com/"
 HEADERS = {'User-Agent': 'Mozilla/5.0'}
 
-CHANNEL_OPTION = ['top', 'new']
-CHANNEL_CHOICE = cfg.CHANNEL_CHOICE
 COMMENT_ID_SPLIT = -1
 
 
@@ -344,13 +340,14 @@ def cli_parser():
                          The data will be saved in a MySQL database 
                          '''))
 
-    parser.add_argument('subreddit', type=str, help='The name of the subreddit that you want to scrape')
-    parser.add_argument('pages', type=int, help='The number of pages to scrape, there are 25 posts on each page')
     parser.add_argument('username', type=str,
                         help='Your username for your MySQL database where the scraped data will be stored',
                         default='root')
     parser.add_argument('password', type=str,
                         help='Your password for your MySQL database where the scraped data will be stored', default='')
+    parser.add_argument('subreddit', type=str, help='The name of the subreddit that you want to scrape')
+    parser.add_argument('choice', type=str, help='The settings of posts selected on the subreddit page: [new, top]\nIn case of top please add "-" followed by specification of range [day, week, month, year, all]')
+    parser.add_argument('pages', type=int, help='The number of pages to scrape, there are 25 posts on each page')
 
     args = parser.parse_args()
     return args
@@ -364,8 +361,10 @@ def main(connection):
     posts_data = []
 
     # get the URL for the subreddit that will be scraped and create a soup object
-    full_url = f'{BASE_URL}r/{SUBREDDIT}/{CHANNEL_OPTION[CHANNEL_CHOICE]}'
-    print(full_url)
+    choice_list = CHOICE.split('-')
+    choice_url = choice_list[0] if len(choice_list) == 1 else f'{choice_list[0]}/?t={choice_list[1]}'
+    full_url = f'{BASE_URL}r/{SUBREDDIT}/{choice_url}'
+    print(f'scraping {full_url}')
     page = requests.get(full_url, headers=HEADERS)
     soup = BeautifulSoup(page.content, 'html.parser')
 
@@ -401,7 +400,7 @@ def main(connection):
                 post_data = get_post_data(post)
                 post_data['subreddit'] = SUBREDDIT
                 post_data['user_id'] = user_id
-                post_data['post_option'] = CHANNEL_OPTION[CHANNEL_CHOICE]
+                post_data['post_option'] = CHOICE[0]
                 post_data['post_source'] = 'subreddit'
                 # get all the comments of the post
                 post_comments = get_comments(post) if int(post_data['comments']) > 0 else None
@@ -422,18 +421,49 @@ def main(connection):
 if __name__ == '__main__':
 
     args = cli_parser()
+    # check number of arguments inserted is valid (.py file is argument too)
+    if len(sys.argv) < 6:
+        print(f'{6 - len(sys.argv)} missing arguments. expected 5 arguments')
+        sys.exit()
+    elif len(sys.argv) > 6:
+        print(f'{len(sys.argv) - 6} extra arguments. expected 5 arguments')
+        sys.exit()
+    # check if subreddit exists
+    full_url = f'{BASE_URL}r/{args.subreddit}'
+    if not requests.get(full_url, headers=HEADERS):
+        print(f'subreddit {args.subreddit} doesn\'t exist, please type a valid one')
+        sys.exit()
+    # check if choice argument is valid
+    choice_list = args.choice.split('-')
+    if choice_list[0] not in ['new', 'top']:
+        print(f'{choice_list[0]} is invalid. please enter valid subreddit choice: [new, top]')
+        sys.exit()
+    if choice_list[0] == 'new' and len(choice_list) > 1:
+        print('do not enter any specification if you want to scrape new posts\nformat is: new')
+        sys.exit()
+    if choice_list[0] == 'top' and len(choice_list) == 1:
+        print('please enter specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
+        sys.exit()
+    if choice_list[0] == 'top' and choice_list[1] not in ['day', 'week', 'month', 'year', 'all']:
+        print(f'{choice_list[1]} is not valid. please enter valid specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
+        sys.exit()
+    # check if number of pages is valid
+    if args.pages < 1:
+        print(f'{args.pages} is invalid. please enter a positive integer number of pages to scrape')
+        sys.exit()
 
     USER_NAME = args.username
     PASSWORD = args.password
     PAGES = args.pages
     SUBREDDIT = args.subreddit
+    CHOICE = args.choice
 
     connection = pymysql.connect(host='localhost',
                                  user=USER_NAME,
                                  password=PASSWORD,
                                  database='reddit_data')
 
-    print('connection made')
+    print('connection to SQL server - success')
     main(connection)
 
     connection.close()
