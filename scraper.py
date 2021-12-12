@@ -218,8 +218,9 @@ def get_user_data(user_url):
     soup = BeautifulSoup(page.content, 'html.parser')
 
     if soup.find(class_='pagename selected').text == 'over 18?':
-        driver = webdriver.Chrome()
+        driver = webdriver.Chrome('C:/Users/haimk/chromedriver.exe')
         driver.get(user_url)
+        time.sleep(2)
         driver.find_element_by_xpath("//div[@class='buttons']//button[@value='yes']").click()
         html = driver.page_source
         soup = BeautifulSoup(html)
@@ -239,7 +240,7 @@ def get_user_data(user_url):
         soup = BeautifulSoup(page.content, 'html.parser')
 
         if soup.find(class_='pagename selected').text == 'over 18?':
-            driver = webdriver.Chrome()
+            driver = webdriver.Chrome('C:/Users/haimk/chromedriver.exe')
             driver.get(user_url)
             driver.find_element_by_xpath("//div[@class='buttons']//button[@value='yes']").click()
             html = driver.page_source
@@ -280,8 +281,7 @@ def get_comments(post_input):
     comments_page = BeautifulSoup(comments_page_req.text, 'html.parser')
     comments_area = comments_page.find('div', class_='commentarea').find('div', class_='sitetable nestedlisting')
     comment_post_id = \
-        re.split('[-_]', comments_page.find('div', class_="sitetable linklisting").findChildren('div')[0].attrs['id'])[
-            -1]
+        re.split('[-_]', comments_page.find('div', class_="sitetable linklisting").findChildren('div')[0].attrs['id'])[-1]
     comments = {}
 
     for index, comment in enumerate(comments_area.select('div[class*="thing"]')):
@@ -297,7 +297,7 @@ def get_comments(post_input):
         author = comment.select('a[class*="author"]')[0].text if comment.select('a[class*="author"]') else 'deleted'
         # get the points of the comment
 
-        points = comment.find('span', class_='score unvoted').text.split()[0] if comment.find('span', class_='score unvoted') else None
+        points = comment.find('span', class_='score unvoted').text.split()[0] if comment.find('span', class_='score unvoted') else 0
         if points and points[-1] == 'k':
             points = int(float(points[:-1]) * 1000)
 
@@ -361,8 +361,10 @@ def main(connection):
     posts_data = []
 
     # get the URL for the subreddit that will be scraped and create a soup object
-    choice_list = CHOICE.split('-')
-    choice_url = choice_list[0] if len(choice_list) == 1 else f'{choice_list[0]}/?t={choice_list[1]}'
+    # choice_list = CHOICE.split('-')
+    # choice_url = choice_list[0] if len(choice_list) == 1 else f'{choice_list[0]}/?t={choice_list[1]}'
+    # full_url = f'{BASE_URL}r/{SUBREDDIT}/{choice_url}'
+    choice_url = CHOICE if TIMEFRAME is None else f'{CHOICE}/?t={TIMEFRAME}'
     full_url = f'{BASE_URL}r/{SUBREDDIT}/{choice_url}'
     print(f'scraping {full_url}')
     page = requests.get(full_url, headers=HEADERS)
@@ -391,16 +393,16 @@ def main(connection):
                     # if got the user already, get their user_id from the SQL db
                     with connection.cursor() as cursor:
                         # Read a single record
-                        sql = f"""select user_id from user where user_name = {username};"""
+                        sql = f"""select user_id from user where user_name = '{username}';"""
                         cursor.execute(sql)
-                        user_id = cursor.fetchone()
+                        user_id = cursor.fetchone()[0]
 
 
                 # Get the post data
                 post_data = get_post_data(post)
                 post_data['subreddit'] = SUBREDDIT
                 post_data['user_id'] = user_id
-                post_data['post_option'] = CHOICE[0]
+                post_data['post_option'] = CHOICE
                 post_data['post_source'] = 'subreddit'
                 # get all the comments of the post
                 post_comments = get_comments(post) if int(post_data['comments']) > 0 else None
@@ -456,7 +458,8 @@ if __name__ == '__main__':
     PASSWORD = args.password
     PAGES = args.pages
     SUBREDDIT = args.subreddit
-    CHOICE = args.choice
+    CHOICE = args.choice.split('-')[0]
+    TIMEFRAME = None if len(args.choice.split('-')) == 1 else args.choice.split('-')[1]
 
     connection = pymysql.connect(host='localhost',
                                  user=USER_NAME,
