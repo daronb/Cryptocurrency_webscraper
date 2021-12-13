@@ -46,6 +46,9 @@ CREATE TABLE IF NOT EXISTS `reddit_data`.`post` (
   `sub_reddit` VARCHAR(45) NOT NULL,
   `post_source` ENUM('user', 'subreddit') NOT NULL,
   `post_option` ENUM('top', 'new') NOT NULL,
+  `positive_sentiment` FLOAT NOT NULL,
+  `neutral_sentiment` FLOAT NOT NULL,
+  `negative_sentiment` FLOAT NOT NULL,
   PRIMARY KEY (`post_id`),
   INDEX `user_id_idx` (`user_id` ASC) VISIBLE,
   CONSTRAINT `user_id`

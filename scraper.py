@@ -7,8 +7,9 @@ import requests
 from selenium import webdriver
 import sys
 import argparse
+import config as cfg
 
-
+huggingface_key = cfg.huggingface_key
 
 BASE_URL = "https://old.reddit.com/"
 HEADERS = {'User-Agent': 'Mozilla/5.0'}
@@ -64,7 +65,8 @@ def insert_user_post_to_sql(data, user_id, connection):
     print('starting insert process')
     with connection.cursor() as cursor:
 
-        fields = 'user_id, title, likes, comments, date_posted, sub_reddit, post_source, post_option'
+        fields = '''user_id, title, likes, comments, date_posted, sub_reddit,
+         post_source, post_option, positive_sentiment, neutral_sentiment, negative_sentiment'''
         place_holder = ', '.join(["" + '%s' + ""] * len(fields.split(',')))
 
         sql = f"""INSERT INTO reddit_data.post ({fields}) VALUES ({place_holder}) 
@@ -74,8 +76,9 @@ def insert_user_post_to_sql(data, user_id, connection):
 
         for post in data[user_name]['new posts']:
             vals = (user_id, post['title'],
-                    int(post['likes']), int(post['comments']),
-                    post['post date'], post['subreddit'], post['post_source'], post['post_option'])
+                    int(post['likes']), int(post['comments']), post['post date'],
+                    post['subreddit'], post['post_source'], post['post_option'],
+                    post['positive_sentiment'], post['neutral_sentiment'], post['negative_sentiment'])
 
             cursor.execute(sql, vals)
         connection.commit()
@@ -83,7 +86,8 @@ def insert_user_post_to_sql(data, user_id, connection):
         for post in data[user_name]['top posts']:
             vals = (user_id, post['title'],
                     int(post['likes']), int(post['comments']),
-                    post['post date'], post['subreddit'], post['post_source'], post['post_option'])
+                    post['post date'], post['subreddit'], post['post_source'], post['post_option'],
+                    post['positive_sentiment'], post['neutral_sentiment'], post['negative_sentiment'])
 
             cursor.execute(sql, vals)
         connection.commit()
@@ -91,19 +95,17 @@ def insert_user_post_to_sql(data, user_id, connection):
 
 def insert_to_sql(data, connection):
     """
-    returns the soup object of the next page
-
+    inserts a post and its comments into sql using
     Parameters
     ----------
-    current_page : the current page from which to move
+    data : the post data along with its comments
+    connection : connection to the SQL database
 
-    Returns
-    -------
-    soup object of the next page to scrape
     """
     print('starting insert process')
     with connection.cursor() as cursor:
-        fields = 'user_id, title, likes, comments, date_posted, sub_reddit, post_source, post_option'
+        fields = '''user_id, title, likes, comments, date_posted, sub_reddit, 
+        post_source, post_option, positive_sentiment, neutral_sentiment, negative_sentiment'''
         place_holder = ', '.join(["" + '%s' + ""] * len(fields.split(',')))
 
         sql = f"""INSERT INTO reddit_data.post ({fields}) VALUES ({place_holder}) 
@@ -111,7 +113,9 @@ def insert_to_sql(data, connection):
 
         vals = (int(data['user_id']), data['title'],
                 int(data['likes']), int(data['comments']),
-                data['post date'], data['subreddit'], data['post_source'], data['post_option'])
+                data['post date'], data['subreddit'], data['post_source'],
+                data['post_option'], data['post_source'], data['post_option'],
+                data['positive_sentiment'], data['neutral_sentiment'], data['negative_sentiment'])
 
         cursor.execute(sql, vals)
         connection.commit()
@@ -119,7 +123,8 @@ def insert_to_sql(data, connection):
         post_id = cursor.lastrowid
         print(f'inserted post {post_id}')
 
-        comment_fields = 'post_id, author, text, points, comment_date, sub_comments, reddit_parent_id, reddit_comment_id, reddit_post_id'
+        comment_fields = '''post_id, author, text, points, comment_date, sub_comments,
+         reddit_parent_id, reddit_comment_id, reddit_post_id'''
         comment_place_holder = ', '.join(["" + '%s' + ""] * len(comment_fields.split(',')))
 
         comment_sql = f"""INSERT INTO reddit_data.comment ({comment_fields}) VALUES ({comment_place_holder}) 
@@ -195,8 +200,11 @@ def get_post_data(post_input):
         likes = 0 if likes == "•" else likes
 
         post_date = post_input.find('time').attrs['datetime']
+        positive_sentiment, neutral_sentiment, negative_sentiment = get_sentiment(title, huggingface_key)
 
-        return {'title': title, 'comments': comments, 'likes': likes, 'post date': post_date}
+        return {'title': title, 'comments': comments, 'likes': likes, 'post date': post_date,
+                'positive_sentiment': positive_sentiment, 'neutral_sentiment': neutral_sentiment,
+                'negative_sentiment': negative_sentiment}
 
 
 def get_user_data(user_url):
@@ -281,7 +289,8 @@ def get_comments(post_input):
     comments_page = BeautifulSoup(comments_page_req.text, 'html.parser')
     comments_area = comments_page.find('div', class_='commentarea').find('div', class_='sitetable nestedlisting')
     comment_post_id = \
-        re.split('[-_]', comments_page.find('div', class_="sitetable linklisting").findChildren('div')[0].attrs['id'])[-1]
+        re.split('[-_]', comments_page.find('div', class_="sitetable linklisting").findChildren('div')[0].attrs['id'])[
+            -1]
     comments = {}
 
     for index, comment in enumerate(comments_area.select('div[class*="thing"]')):
@@ -297,7 +306,8 @@ def get_comments(post_input):
         author = comment.select('a[class*="author"]')[0].text if comment.select('a[class*="author"]') else 'deleted'
         # get the points of the comment
 
-        points = comment.find('span', class_='score unvoted').text.split()[0] if comment.find('span', class_='score unvoted') else 0
+        points = comment.find('span', class_='score unvoted').text.split()[0] if comment.find('span',
+                                                                                              class_='score unvoted') else 0
         if points and points[-1] == 'k':
             points = int(float(points[:-1]) * 1000)
 
@@ -323,11 +333,14 @@ def get_comments(post_input):
 
 
 def cli_parser():
+
     """
     Gets the CLI arguments for the scraper
-    :return:
-    arguments
+    Returns
+    -------
+    arguments set by the user
     """
+
     parser = argparse.ArgumentParser(
         prog='SCRAPER',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -346,15 +359,44 @@ def cli_parser():
     parser.add_argument('password', type=str,
                         help='Your password for your MySQL database where the scraped data will be stored', default='')
     parser.add_argument('subreddit', type=str, help='The name of the subreddit that you want to scrape')
-    parser.add_argument('choice', type=str, help='The settings of posts selected on the subreddit page: [new, top]\nIn case of top please add "-" followed by specification of range [day, week, month, year, all]')
+    parser.add_argument('choice', type=str,
+                        help='The settings of posts selected on the subreddit page: [new, top]\nIn case of top please add "-" followed by specification of range [day, week, month, year, all]')
     parser.add_argument('pages', type=int, help='The number of pages to scrape, there are 25 posts on each page')
 
     args = parser.parse_args()
     return args
 
 
-def main(connection):
+def get_sentiment(text, key):
+    """
+    Gets the positive and negative sentiment of a post from reddit
+    Parameters
+    ----------
+    text : text to analyse and get the sentiment
+    key : HuggingFace API key
 
+    Returns
+    -------
+    tuple of the positive and negative sentiment for the text
+    """
+
+    API_URL = "https://api-inference.huggingface.co/models/finiteautomata/beto-sentiment-analysis"
+    headers = {"Authorization": f"Bearer {key}"}
+
+    def query(payload):
+        response = requests.post(API_URL, headers=headers, json=payload)
+        return response.json()
+
+    output = query({"inputs": text})
+
+    positive = output[0][0]['score']
+    neutral = output[0][1]['score']
+    negative = output[0][2]['score']
+
+    return negative, neutral, positive
+
+
+def main(connection):
     users = {}
 
     # for index, channel in enumerate(CHANNELS):
@@ -397,7 +439,6 @@ def main(connection):
                         cursor.execute(sql)
                         user_id = cursor.fetchone()[0]
 
-
                 # Get the post data
                 post_data = get_post_data(post)
                 post_data['subreddit'] = SUBREDDIT
@@ -417,7 +458,6 @@ def main(connection):
         counter += 1
 
     print('Done scraping!')
-
 
 
 if __name__ == '__main__':
@@ -444,10 +484,12 @@ if __name__ == '__main__':
         print('do not enter any specification if you want to scrape new posts\nformat is: new')
         sys.exit()
     if choice_list[0] == 'top' and len(choice_list) == 1:
-        print('please enter specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
+        print(
+            'please enter specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
         sys.exit()
     if choice_list[0] == 'top' and choice_list[1] not in ['day', 'week', 'month', 'year', 'all']:
-        print(f'{choice_list[1]} is not valid. please enter valid specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
+        print(
+            f'{choice_list[1]} is not valid. please enter valid specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
         sys.exit()
     # check if number of pages is valid
     if args.pages < 1:
