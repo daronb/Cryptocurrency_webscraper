@@ -7,6 +7,7 @@ from selenium import webdriver
 import sys
 import argparse
 import config as cfg
+import logging
 
 # internet constants
 BASE_URL = cfg.BASE_URL
@@ -30,6 +31,10 @@ VIEWS = cfg.VIEWS
 UNSUPPORTED_FORMAT = cfg.UNSUPPORTED_FORMAT
 CONVERT_THOUSAND = 1000
 
+logging.basicConfig(filename=cfg.LOG_FILE_NAME,
+                    format='%(asctime)s-%(levelname)s-FILE:%(filename)s-FUNC:%(funcName)s-LINE:%(lineno)d-%(message)s',
+                    level=cfg.LOGGING_LEVEL)
+
 
 # ----- DB population functions -----
 def insert_user(data, connection):
@@ -45,11 +50,10 @@ def insert_user(data, connection):
     -------
     user_id
     """
+    user_name = list(data.keys())[-1]
+    logging.info(f"inserting user '{user_name}'")
+
     with connection.cursor() as cursor:
-        print('inserting user')
-
-        user_name = list(data.keys())[-1]
-
         place_holder = ', '.join(["" + '%s' + ""] * len(USER_FIELDS.split(',')))
         sql = f"""INSERT INTO reddit_data.user ({USER_FIELDS}) VALUES ({place_holder})
         on duplicate key update post_karma = values(post_karma), comment_karma = values(comment_karma);"""
@@ -64,12 +68,13 @@ def insert_user(data, connection):
             get_user_id_sql = f"select user_id from reddit_data.user where user_name = '{user_name}';"
             cursor.execute(get_user_id_sql)
             user_id = cursor.fetchone()[0]
+            logging.debug(f"user {user_id} is in database")
 
         # insert the user's posts data into SQL
         insert_user_posts(data, user_id, connection)
 
-        print(f'created user {user_id}')
-
+        logging.info(f"inserting user '{user_name} - done'")
+        logging.debug(f'inserted user id: {user_id}')
         return user_id
 
 
@@ -83,11 +88,10 @@ def insert_user_posts(data, user_id, connection):
     user_id : user_id to link to user in SQL
     connection : connection to SQL database
     """
-    print('inserting user posts')
+    user_name = list(data.keys())[-1]
 
     with connection.cursor() as cursor:
-        user_name = list(data.keys())[-1]
-
+        logging.info(f"inserting user '{user_name}' new posts")
         place_holder = ', '.join(["" + '%s' + ""] * len(POST_FIELDS.split(',')))
         sql = f"""INSERT INTO reddit_data.post ({POST_FIELDS}) VALUES ({place_holder}) 
         on duplicate key update likes = values(likes), comments = values(comments);"""
@@ -99,7 +103,9 @@ def insert_user_posts(data, user_id, connection):
 
             cursor.execute(sql, vals)
         connection.commit()
-        # inserting users top posts
+        logging.info(f"inserting user '{user_name}' new posts - done")
+
+        logging.info(f"inserting user '{user_name}' top posts")
         for post in data[user_name]['top posts']:
             vals = (user_id, post['title'], int(post['likes']), int(post['comments']),
                     post['post date'], post['subreddit'], post['post_source'], post['post_option'],
@@ -107,9 +113,10 @@ def insert_user_posts(data, user_id, connection):
 
             cursor.execute(sql, vals)
         connection.commit()
+        logging.info(f"inserting user '{user_name}' top posts - done")
 
 
-def insert_post(data, connection):
+def insert_subreddit_post(data, connection):
     """
     inserts a post and its comments into SQL
 
@@ -118,21 +125,26 @@ def insert_post(data, connection):
     data : the post data along with its comments
     connection : connection to SQL database
     """
-    print('inserting post (and comments)')
+    logging.info('inserting subreddit post')
 
     with connection.cursor() as cursor:
         place_holder = ', '.join(["" + '%s' + ""] * len(POST_FIELDS.split(',')))
         sql = f"""INSERT INTO reddit_data.post ({POST_FIELDS}) VALUES ({place_holder}) 
-        on duplicate key update likes = values(likes), comments = values(comments),post_id=LAST_INSERT_ID(post_id);"""
+        on duplicate key update likes = values(likes), comments = values(comments);"""
 
         vals = (int(data['user_id']), data['title'], int(data['likes']), int(data['comments']), data['post date'],
-                data['subreddit'], data['post_source'], data['post_option'], data['post_source'], data['post_option'],
+                data['subreddit'], data['post_source'], data['post_option'],
                 data['positive_sentiment'], data['neutral_sentiment'], data['negative_sentiment'])
-        # inserting post
         cursor.execute(sql, vals)
         connection.commit()
+        logging.info('inserting subreddit post - done')
 
-        post_id = cursor.lastrowid
+        # retrieve post id for updating corresponding comments
+        sql = f"""select post_id from post
+        where user_id={int(data['user_id'])} and date_posted='{data['post date']}' and sub_reddit='{data['subreddit']}'
+        and post_source = '{data['post_source']}' and post_option = '{data['post_option']}';"""
+        cursor.execute(sql)
+        post_id = cursor.fetchone()[0]
         # insert comments if there are any
         comment_data = data['post comments']
         if comment_data:
@@ -151,6 +163,8 @@ def insert_comment(data, post_id, connection):
     post_id : post id
     connection : connection to SQL database
     """
+    logging.info('inserting comments data')
+
     with connection.cursor() as cursor:
         comment_place_holder = ', '.join(["" + '%s' + ""] * len(COMMENT_FIELDS.split(',')))
         comment_sql = f"""INSERT INTO reddit_data.comment ({COMMENT_FIELDS}) VALUES ({comment_place_holder}) 
@@ -167,8 +181,9 @@ def insert_comment(data, post_id, connection):
         # linking child comments and parent comments
         cursor.execute(UPDATE_COMMENT_QUERY)
         connection.commit()
+        logging.debug('updated comments tree indices')
 
-        print(f'inserted comments for post {post_id}')
+        logging.info('inserting comments data - done')
 
 
 # ----- page redirection functions -----
@@ -206,7 +221,7 @@ def give_consent(url):
     -------
     users main page soup object
     """
-    driver = webdriver.Chrome('C:/Users/haimk/chromedriver.exe')
+    driver = webdriver.Chrome(cfg.WEBDRIVER_PATH)
     driver.get(url)
     time.sleep(2)
 
@@ -232,8 +247,6 @@ def get_post_data(post_input, view, user_id=None):
     -------
     dictionary of post data
     """
-    subreddit = post_input.find(class_='subreddit hover may-blank').text if post_input.find(
-        class_='subreddit hover may-blank') else 'missing'
     title = post_input.find('p', class_="title").find('a').text
     comments = post_input.find('a', class_='comments').text.split()[0]
     likes = post_input.find("div", class_="score likes").text
@@ -246,10 +259,14 @@ def get_post_data(post_input, view, user_id=None):
         likes = 0
     # different features for subreddit and user posts
     if user_id:  # subreddit post
+        subreddit = f'r/{arg_subreddit}'
         post_source = 'subreddit'
         post_comments = get_comments_data(post_input) if int(comments) > 0 else None
     else:  # user post
+        subreddit = post_input.find(class_='subreddit hover may-blank').text if post_input.find(
+            class_='subreddit hover may-blank') else 'missing'
         post_source = 'user'
+        post_comments = None
     # get post sentiment from API
     positive_sentiment, neutral_sentiment, negative_sentiment = get_sentiment(title, API_KEY)
 
@@ -274,10 +291,12 @@ def get_user_data(url):
     """
     user_data = {}
 
+    logging.info('getting user data')
     page = requests.get(url, headers=HEADERS)
     soup = BeautifulSoup(page.content, 'html.parser')
     # get pass 'over 18' redirection
     if soup.find(class_='pagename selected').text == 'over 18?':
+        logging.debug('encountered over 18 redirection')
         soup = give_consent(url)
     # users meta features
     post_karma = soup.find(class_='karma').text
@@ -292,6 +311,7 @@ def get_user_data(url):
         posts_url = f'{url}/submitted/?sort={view}'
         user_data[f'{view} posts'] = get_user_posts_data(posts_url, view)
 
+    logging.info('getting user data - done')
     return user_data
 
 
@@ -309,6 +329,7 @@ def get_user_posts_data(url, view):
     list of posts
     """
     posts_data = []
+    logging.info(f'getting user {view} posts')
 
     page = requests.get(url, headers=HEADERS)
     soup = BeautifulSoup(page.content, 'html.parser')
@@ -320,6 +341,7 @@ def get_user_posts_data(url, view):
         post_data = get_post_data(post, view=view)
         posts_data.append(post_data)
 
+    logging.info(f'getting user {view} posts - done')
     return posts_data
 
 
@@ -337,6 +359,7 @@ def get_comments_data(post_input):
     list of comments
     """
     comments = list()
+    logging.info('getting comment data')
 
     comments_url = post_input.find('a', class_="bylink comments may-blank").attrs['href']
     page = requests.get(comments_url, headers=HEADERS)
@@ -368,6 +391,7 @@ def get_comments_data(post_input):
                          'sub comments': sub_comments, 'parent_comment_id': parent_id, 'child_comment_id': child_id,
                          'comment_post_id': comment_post_id})
 
+    logging.info('getting comment data - done')
     return comments
 
 
@@ -384,9 +408,17 @@ def get_sentiment(text, key):
     -------
     tuple of the positive, neutral and negative sentiment for the text
     """
+    logging.debug('getting sentiment analysis')
     headers = {"Authorization": f"Bearer {key}"}
-    output = requests.post(API_URL, headers=headers, json={"inputs": text}).json()[0]
+    try:
+        response = requests.post(API_URL, headers=headers, json={"inputs": text}, timeout=2)
+        output = response.json()[0]
+    except requests.exceptions.Timeout:
+        # no sentiment is available
+        logging.warning('API call timeout')
+        return -1, -1, -1
 
+    logging.debug('getting sentiment analysis done')
     return output[0]['score'], output[1]['score'], output[2]['score']
 
 
@@ -401,6 +433,7 @@ def scrape_page(soup, connection):
     connection : SQL connection
     """
     users = {}
+    logging.info('started scraping a new page')
 
     for post in soup.select('div[class*="thing"]'):
         # check that the post is not promotional or an announcement, we only want real posts
@@ -410,16 +443,22 @@ def scrape_page(soup, connection):
             # check if we have scraped this user in this session, if not then get their data
             username = post.select('a[class*="author"]')[0].text
             if username not in users.keys():  # if user was not scraped recently
+                logging.debug(f"user '{username}' is not in cache")
                 users[username] = get_user_data(post.select('a[class*="author"]')[0].attrs['href'])
                 user_id = insert_user(users, connection)
+
             else:  # if user is scraped already, get user_id from DB
+                logging.debug(f"user '{username}' is in cache")
                 with connection.cursor() as cursor:
                     sql = f"""select user_id from user where user_name = '{username}';"""
                     cursor.execute(sql)
                     user_id = cursor.fetchone()[0]
 
+            logging.info('getting subreddit post data')
             post_data = get_post_data(post, view=arg_choice, user_id=user_id)
-            insert_post(post_data, connection)
+            logging.info('getting subreddit post data - done')
+            insert_subreddit_post(post_data, connection)
+    logging.info('finished scraping page')
 
 
 def scrape_subreddit(connection):
@@ -432,7 +471,7 @@ def scrape_subreddit(connection):
     """
     choice_url = arg_choice if arg_timeframe is None else f'{arg_choice}/?t={arg_timeframe}'
     main_page_url = f'{BASE_URL}r/{arg_subreddit}/{choice_url}'
-    print(f'scraping {main_page_url}')
+    logging.info(f'started scraping {main_page_url}')
 
     page = requests.get(main_page_url, headers=HEADERS)
     soup = BeautifulSoup(page.content, 'html.parser')
@@ -444,7 +483,7 @@ def scrape_subreddit(connection):
         # get the next page, return None if there are no more pages
         soup = get_next_page(soup)
 
-    print('Done scraping!')
+    logging.info('scraping done!')
 
 
 # ----- CLI functions -----
@@ -506,6 +545,7 @@ def validate_args(args):
     if args.pages < 1:
         print(f'{args.pages} is invalid. please enter a positive integer number of pages to scrape')
         sys.exit()
+    logging.info('CLI args validated')
 
 
 if __name__ == '__main__':
@@ -523,8 +563,8 @@ if __name__ == '__main__':
                                      user=arg_user_name,
                                      password=arg_password,
                                      database='reddit_data')
+    logging.info('connection to SQL server - success')
 
-    print('connection to SQL server - success')
     scrape_subreddit(sql_connection)
 
     sql_connection.close()

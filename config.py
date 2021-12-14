@@ -1,7 +1,9 @@
+import logging
+
 BASE_URL = "https://old.reddit.com/"
 HEADERS = {'User-Agent': 'Mozilla/5.0'}
 
-API_KEY = ''
+API_KEY = 'PLEASE INSERT API KEY HERE'
 API_URL = "https://api-inference.huggingface.co/models/finiteautomata/beto-sentiment-analysis"
 
 USER_FIELDS = 'user_name, post_karma, comment_karma, date_joined'
@@ -31,3 +33,8 @@ CLI_SUBREDDIT_HELP = 'The name of the subreddit that you want to scrape'
 CLI_CHOICE_HELP = '''The settings of posts selected on the subreddit page: [new, top]
     In case of top please add "-" followed by specification of range [day, week, month, year, all]'''
 CLI_PAGES_HELP = 'The number of pages to scrape, there are 25 posts on each page'
+
+WEBDRIVER_PATH = 'PLEASE INSERT CHROME WEB-DRIVER PATH HERE'
+
+LOG_FILE_NAME = 'scraper_log.log'
+LOGGING_LEVEL = logging.INFO
