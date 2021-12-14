@@ -1,4 +1,3 @@
-import textwrap
 import time
 import re
 import pymysql.cursors
@@ -9,83 +8,100 @@ import sys
 import argparse
 import config as cfg
 
-huggingface_key = cfg.huggingface_key
+# internet constants
+BASE_URL = cfg.BASE_URL
+HEADERS = cfg.HEADERS
+API_URL = cfg.API_URL
+API_KEY = cfg.API_KEY
+# SQL queries constants
+USER_FIELDS = cfg.USER_FIELDS
+POST_FIELDS = cfg.POST_FIELDS
+COMMENT_FIELDS = cfg.COMMENT_FIELDS
+UPDATE_COMMENT_QUERY = cfg.UPDATE_COMMENT_QUERY
+# CLI constants
+CLI_DESCRIPTION = cfg.CLI_DESCRIPTION
+CLI_USERNAME_HELP = cfg.CLI_USERNAME_HELP
+CLI_PASSWORD_HELP = cfg.CLI_PASSWORD_HELP
+CLI_SUBREDDIT_HELP = cfg.CLI_SUBREDDIT_HELP
+CLI_CHOICE_HELP = cfg.CLI_CHOICE_HELP
+CLI_PAGES_HELP = cfg.CLI_PAGES_HELP
+# miscellaneous
+VIEWS = cfg.VIEWS
+UNSUPPORTED_FORMAT = cfg.UNSUPPORTED_FORMAT
+CONVERT_THOUSAND = 1000
 
-BASE_URL = "https://old.reddit.com/"
-HEADERS = {'User-Agent': 'Mozilla/5.0'}
 
-COMMENT_ID_SPLIT = -1
-
-
-def user_insert_to_sql(data, connection):
+# ----- DB population functions -----
+def insert_user(data, connection):
     """
     Inserts the user's data into SQL and returns the unique user_id for SQL
-    :param data: user data
-    :param connection: SQL connection
-    :return: user_id
+
+    Parameters
+    ----------
+    data : user data
+    connection : connection to SQL database
+
+    Returns
+    -------
+    user_id
     """
     with connection.cursor() as cursor:
-        fields = 'user_name, post_karma, comment_karma, date_joined'
-
-        place_holder = ', '.join(["" + '%s' + ""] * len(fields.split(',')))
-
-        sql = f"""INSERT INTO reddit_data.user ({fields}) VALUES ({place_holder})
-        on duplicate key update post_karma = values(post_karma), comment_karma = values(comment_karma);"""
+        print('inserting user')
 
         user_name = list(data.keys())[-1]
 
-        vals = (user_name,
-                data[user_name]['post karma'],
-                data[user_name]['comment karma'],
-                data[user_name]['age'])
+        place_holder = ', '.join(["" + '%s' + ""] * len(USER_FIELDS.split(',')))
+        sql = f"""INSERT INTO reddit_data.user ({USER_FIELDS}) VALUES ({place_holder})
+        on duplicate key update post_karma = values(post_karma), comment_karma = values(comment_karma);"""
+        vals = (user_name, data[user_name]['post karma'], data[user_name]['comment karma'], data[user_name]['age'])
 
         cursor.execute(sql, vals)
-
         connection.commit()
-        user_id = cursor.lastrowid
 
+        user_id = cursor.lastrowid
+        # in case the user already exists (user_id == 0), retrieve existing user_id from the DB
         if user_id == 0:
             get_user_id_sql = f"select user_id from reddit_data.user where user_name = '{user_name}';"
             cursor.execute(get_user_id_sql)
             user_id = cursor.fetchone()[0]
+
+        # insert the user's posts data into SQL
+        insert_user_posts(data, user_id, connection)
 
         print(f'created user {user_id}')
 
         return user_id
 
 
-def insert_user_post_to_sql(data, user_id, connection):
+def insert_user_posts(data, user_id, connection):
     """
     inserts the user's posts into SQL
 
-    :param data: user post data
-    :param user_id: user_id to link to user in SQL
-    :param connection: sql connection
+    Parameters
+    ----------
+    data : user post data
+    user_id : user_id to link to user in SQL
+    connection : connection to SQL database
     """
-    print('starting insert process')
+    print('inserting user posts')
+
     with connection.cursor() as cursor:
-
-        fields = '''user_id, title, likes, comments, date_posted, sub_reddit,
-         post_source, post_option, positive_sentiment, neutral_sentiment, negative_sentiment'''
-        place_holder = ', '.join(["" + '%s' + ""] * len(fields.split(',')))
-
-        sql = f"""INSERT INTO reddit_data.post ({fields}) VALUES ({place_holder}) 
-        on duplicate key update likes = values(likes), comments = values(comments);"""
-
         user_name = list(data.keys())[-1]
 
+        place_holder = ', '.join(["" + '%s' + ""] * len(POST_FIELDS.split(',')))
+        sql = f"""INSERT INTO reddit_data.post ({POST_FIELDS}) VALUES ({place_holder}) 
+        on duplicate key update likes = values(likes), comments = values(comments);"""
+        # inserting users new posts
         for post in data[user_name]['new posts']:
-            vals = (user_id, post['title'],
-                    int(post['likes']), int(post['comments']), post['post date'],
+            vals = (user_id, post['title'], int(post['likes']), int(post['comments']), post['post date'],
                     post['subreddit'], post['post_source'], post['post_option'],
                     post['positive_sentiment'], post['neutral_sentiment'], post['negative_sentiment'])
 
             cursor.execute(sql, vals)
         connection.commit()
-
+        # inserting users top posts
         for post in data[user_name]['top posts']:
-            vals = (user_id, post['title'],
-                    int(post['likes']), int(post['comments']),
+            vals = (user_id, post['title'], int(post['likes']), int(post['comments']),
                     post['post date'], post['subreddit'], post['post_source'], post['post_option'],
                     post['positive_sentiment'], post['neutral_sentiment'], post['negative_sentiment'])
 
@@ -93,67 +109,69 @@ def insert_user_post_to_sql(data, user_id, connection):
         connection.commit()
 
 
-def insert_to_sql(data, connection):
+def insert_post(data, connection):
     """
-    inserts a post and its comments into sql using
+    inserts a post and its comments into SQL
+
     Parameters
     ----------
     data : the post data along with its comments
-    connection : connection to the SQL database
-
+    connection : connection to SQL database
     """
-    print('starting insert process')
-    with connection.cursor() as cursor:
-        fields = '''user_id, title, likes, comments, date_posted, sub_reddit, 
-        post_source, post_option, positive_sentiment, neutral_sentiment, negative_sentiment'''
-        place_holder = ', '.join(["" + '%s' + ""] * len(fields.split(',')))
+    print('inserting post (and comments)')
 
-        sql = f"""INSERT INTO reddit_data.post ({fields}) VALUES ({place_holder}) 
+    with connection.cursor() as cursor:
+        place_holder = ', '.join(["" + '%s' + ""] * len(POST_FIELDS.split(',')))
+        sql = f"""INSERT INTO reddit_data.post ({POST_FIELDS}) VALUES ({place_holder}) 
         on duplicate key update likes = values(likes), comments = values(comments),post_id=LAST_INSERT_ID(post_id);"""
 
-        vals = (int(data['user_id']), data['title'],
-                int(data['likes']), int(data['comments']),
-                data['post date'], data['subreddit'], data['post_source'],
-                data['post_option'], data['post_source'], data['post_option'],
+        vals = (int(data['user_id']), data['title'], int(data['likes']), int(data['comments']), data['post date'],
+                data['subreddit'], data['post_source'], data['post_option'], data['post_source'], data['post_option'],
                 data['positive_sentiment'], data['neutral_sentiment'], data['negative_sentiment'])
-
+        # inserting post
         cursor.execute(sql, vals)
         connection.commit()
 
         post_id = cursor.lastrowid
+        # insert comments if there are any
+        comment_data = data['post comments']
+        if comment_data:
+            insert_comment(comment_data, post_id, connection)
+
         print(f'inserted post {post_id}')
 
-        comment_fields = '''post_id, author, text, points, comment_date, sub_comments,
-         reddit_parent_id, reddit_comment_id, reddit_post_id'''
-        comment_place_holder = ', '.join(["" + '%s' + ""] * len(comment_fields.split(',')))
 
-        comment_sql = f"""INSERT INTO reddit_data.comment ({comment_fields}) VALUES ({comment_place_holder}) 
-        on duplicate key update sub_comments = values(sub_comments);"""
+def insert_comment(data, post_id, connection):
+    """
+    inserts posts comments into SQL
 
-        if data['post comments']:
-            comment_data = data['post comments']
+    Parameters
+    ----------
+    data : dictionary of comments data
+    post_id : post id
+    connection : connection to SQL database
+    """
+    with connection.cursor() as cursor:
+        comment_place_holder = ', '.join(["" + '%s' + ""] * len(COMMENT_FIELDS.split(',')))
+        comment_sql = f"""INSERT INTO reddit_data.comment ({COMMENT_FIELDS}) VALUES ({comment_place_holder}) 
+                    on duplicate key update sub_comments = values(sub_comments);"""
 
-            for comment in comment_data:
-                comment = comment_data[comment]
-                comment_vals = (post_id, comment['author'], comment['text'], comment['points'],
-                                comment['comment time'], int(comment['sub comments']),
-                                comment['parent_comment_id'], comment['child_comment_id'],
-                                comment['comment_post_id'])
+        for comment in data:
+            comment_vals = (post_id, comment['author'], comment['text'], comment['points'],
+                            comment['comment time'], int(comment['sub comments']),
+                            comment['parent_comment_id'], comment['child_comment_id'],
+                            comment['comment_post_id'])
 
-                cursor.execute(comment_sql, comment_vals)
-            connection.commit()
-
-            update_sql = """update reddit_data.comment a 
-                    join reddit_data.comment b on a.reddit_parent_id = b.reddit_comment_id
-                    set a.parent_comment_id = b.comments_id
-                    where a.comments_id > 0;"""
-
-            cursor.execute(update_sql)
-            connection.commit()
+            cursor.execute(comment_sql, comment_vals)
+        connection.commit()
+        # linking child comments and parent comments
+        cursor.execute(UPDATE_COMMENT_QUERY)
+        connection.commit()
 
         print(f'inserted comments for post {post_id}')
 
 
+# ----- page redirection functions -----
 def get_next_page(current_page):
     """
     returns the soup object of the next page
@@ -169,7 +187,6 @@ def get_next_page(current_page):
     time.sleep(0.5)
 
     next_button = current_page.find("span", class_="next-button")
-
     if next_button:
         next_page_link = next_button.find("a").attrs['href']
         next_page = requests.get(next_page_link, headers=HEADERS)
@@ -177,44 +194,79 @@ def get_next_page(current_page):
         return BeautifulSoup(next_page.text, 'html.parser')
 
 
-def get_post_data(post_input):
+def give_consent(url):
     """
-    Returns the following data from an individual post soup object:
-    title, number of comments, number of likes, the date of the post
+    return users main page (in case of NSFW content)
 
     Parameters
     ----------
-    post_input : the post soup object to get the data from
+    url : users main page 'over 18' redirection url
 
     Returns
     -------
-    dictionary of the scraped data
+    users main page soup object
     """
-    if post_input.find('p', class_="title"):
-        title = post_input.find('p', class_="title").find('a').text
-        comments = post_input.find('a', class_='comments').text.split()[0]
-        comments = 0 if comments == "comment" else comments
-        likes = post_input.find("div", class_="score likes").text
-        if likes[-1] == 'k':
-            likes = int(float(likes[:-1]) * 1000)
-        likes = 0 if likes == "•" else likes
+    driver = webdriver.Chrome('C:/Users/haimk/chromedriver.exe')
+    driver.get(url)
+    time.sleep(2)
 
-        post_date = post_input.find('time').attrs['datetime']
-        positive_sentiment, neutral_sentiment, negative_sentiment = get_sentiment(title, huggingface_key)
+    driver.find_element_by_xpath("//div[@class='buttons']//button[@value='yes']").click()
+    html = driver.page_source
 
-        return {'title': title, 'comments': comments, 'likes': likes, 'post date': post_date,
-                'positive_sentiment': positive_sentiment, 'neutral_sentiment': neutral_sentiment,
-                'negative_sentiment': negative_sentiment}
+    return BeautifulSoup(html)
 
 
-def get_user_data(user_url):
+# ----- data retrieval functions -----
+def get_post_data(post_input, view, user_id=None):
     """
-    returns user data dictionary from user_url in the following format:
-    new comments list, top comments list, new posts list, top posts list
+    Returns the following data from an individual post soup object:
+        title, number of comments, number of likes, the date of the post
 
     Parameters
     ----------
-    user_url : url of the user
+    post_input : post soup object
+    view : page view of scraped post
+    user_id : id of post author
+
+    Returns
+    -------
+    dictionary of post data
+    """
+    subreddit = post_input.find(class_='subreddit hover may-blank').text if post_input.find(
+        class_='subreddit hover may-blank') else 'missing'
+    title = post_input.find('p', class_="title").find('a').text
+    comments = post_input.find('a', class_='comments').text.split()[0]
+    likes = post_input.find("div", class_="score likes").text
+    post_date = post_input.find('time').attrs['datetime']
+    # fix features
+    comments = 0 if comments == "comment" else comments
+    if likes[-1] == 'k':
+        likes = int(float(likes[:-1]) * CONVERT_THOUSAND)
+    elif likes == "•":
+        likes = 0
+    # different features for subreddit and user posts
+    if user_id:  # subreddit post
+        post_source = 'subreddit'
+        post_comments = get_comments_data(post_input) if int(comments) > 0 else None
+    else:  # user post
+        post_source = 'user'
+    # get post sentiment from API
+    positive_sentiment, neutral_sentiment, negative_sentiment = get_sentiment(title, API_KEY)
+
+    return {'user_id': user_id, 'subreddit': subreddit, 'post_option': view, 'post_source': post_source,
+            'title': title, 'comments': comments, 'post comments': post_comments, 'likes': likes,
+            'post date': post_date, 'positive_sentiment': positive_sentiment, 'neutral_sentiment': neutral_sentiment,
+            'negative_sentiment': negative_sentiment}
+
+
+def get_user_data(url):
+    """
+    returns user data dictionary from url in the following format:
+        new comments list, top comments list, new posts list, top posts list
+
+    Parameters
+    ----------
+    url : url of the user main page
 
     Returns
     -------
@@ -222,17 +274,12 @@ def get_user_data(user_url):
     """
     user_data = {}
 
-    page = requests.get(user_url, headers=HEADERS)
+    page = requests.get(url, headers=HEADERS)
     soup = BeautifulSoup(page.content, 'html.parser')
-
+    # get pass 'over 18' redirection
     if soup.find(class_='pagename selected').text == 'over 18?':
-        driver = webdriver.Chrome('C:/Users/haimk/chromedriver.exe')
-        driver.get(user_url)
-        time.sleep(2)
-        driver.find_element_by_xpath("//div[@class='buttons']//button[@value='yes']").click()
-        html = driver.page_source
-        soup = BeautifulSoup(html)
-
+        soup = give_consent(url)
+    # users meta features
     post_karma = soup.find(class_='karma').text
     comment_karma = soup.find(class_='karma comment-karma').text
     age = soup.find(class_='age').contents[1].attrs['datetime']
@@ -240,41 +287,46 @@ def get_user_data(user_url):
     user_data['post karma'] = int(post_karma.replace(',', ''))
     user_data['comment karma'] = int(comment_karma.replace(',', ''))
     user_data['age'] = age
-
-    for sort in ['new', 'top']:
-        post_data = []
-
-        page = requests.get(f'{user_url}/submitted/?sort={sort}', headers=HEADERS)
-        soup = BeautifulSoup(page.content, 'html.parser')
-
-        if soup.find(class_='pagename selected').text == 'over 18?':
-            driver = webdriver.Chrome('C:/Users/haimk/chromedriver.exe')
-            driver.get(user_url)
-            driver.find_element_by_xpath("//div[@class='buttons']//button[@value='yes']").click()
-            html = driver.page_source
-            soup = BeautifulSoup(html)
-
-        for post in soup.select('div[class*="thing"]'):
-            subreddit = post.find(class_='subreddit hover may-blank').text if post.find(
-                class_='subreddit hover may-blank') else 'missing'
-            last_post_data = get_post_data(post)
-            # check if a post existed
-            if last_post_data:
-                last_post_data['post_source'] = 'user'
-                last_post_data['post_option'] = sort
-                last_post_data['subreddit'] = subreddit
-                post_data.append(last_post_data)
-
-        # user_data[f'{sort} comments'] = comment_data
-        user_data[f'{sort} posts'] = post_data
+    # users posts
+    for view in VIEWS:
+        posts_url = f'{url}/submitted/?sort={view}'
+        user_data[f'{view} posts'] = get_user_posts_data(posts_url, view)
 
     return user_data
 
 
-def get_comments(post_input):
+def get_user_posts_data(url, view):
     """
-    returns a dictionary of the following information for each comment made on the post_input soup:
-    author of the comment, date of the comment, number of sub-comments
+    return list of user posts from specified view
+
+    Parameters
+    ----------
+    url : posts url
+    view : posts view (new, top)
+
+    Returns
+    -------
+    list of posts
+    """
+    posts_data = []
+
+    page = requests.get(url, headers=HEADERS)
+    soup = BeautifulSoup(page.content, 'html.parser')
+    # get pass 'over 18' redirection
+    if soup.find(class_='pagename selected').text == 'over 18?':
+        soup = give_consent(url)
+
+    for post in soup.select('div[class*="thing"]'):
+        post_data = get_post_data(post, view=view)
+        posts_data.append(post_data)
+
+    return posts_data
+
+
+def get_comments_data(post_input):
+    """
+    returns a list of comment dictionaries with the following information for each comment:
+        author of the comment, date of the comment, number of sub-comments
 
     Parameters
     ----------
@@ -282,94 +334,47 @@ def get_comments(post_input):
 
     Returns
     -------
-    dictionary containing comment information
+    list of comments
     """
-    comments_page_link = post_input.find('a', class_="bylink comments may-blank").attrs['href']
-    comments_page_req = requests.get(comments_page_link, headers=HEADERS)
-    comments_page = BeautifulSoup(comments_page_req.text, 'html.parser')
-    comments_area = comments_page.find('div', class_='commentarea').find('div', class_='sitetable nestedlisting')
-    comment_post_id = \
-        re.split('[-_]', comments_page.find('div', class_="sitetable linklisting").findChildren('div')[0].attrs['id'])[
-            -1]
-    comments = {}
+    comments = list()
 
-    for index, comment in enumerate(comments_area.select('div[class*="thing"]')):
+    comments_url = post_input.find('a', class_="bylink comments may-blank").attrs['href']
+    page = requests.get(comments_url, headers=HEADERS)
+    soup = BeautifulSoup(page.text, 'html.parser')
 
-        if comment.attrs['class'][-1] in ['morechildren', 'morerecursion']:
+    reddit_post_id = soup.find('div', class_="sitetable linklisting").findChildren('div')[0].attrs['id']
+    comment_post_id = re.split('[-_]', reddit_post_id)[-1]
+
+    comments_area = soup.find('div', class_='commentarea').find('div', class_='sitetable nestedlisting')
+    for comment in comments_area.select('div[class*="thing"]'):
+        # skip comment elements that are expansion button or deleted
+        expand = comment.attrs['class'][-1] in ['morechildren', 'morerecursion']
+        deleted = 'deleted' in comment.attrs['class']
+        if expand or deleted:
             continue
-        if 'deleted' in comment.attrs['class']:
-            continue
-
-        parent_id = re.split('[-_]', comment.parent.attrs['id'])[COMMENT_ID_SPLIT]
-        child_id = re.split('[-_]', comment.attrs['id'])[COMMENT_ID_SPLIT]
 
         author = comment.select('a[class*="author"]')[0].text if comment.select('a[class*="author"]') else 'deleted'
-        # get the points of the comment
-
-        points = comment.find('span', class_='score unvoted').text.split()[0] if comment.find('span',
-                                                                                              class_='score unvoted') else 0
-        if points and points[-1] == 'k':
-            points = int(float(points[:-1]) * 1000)
-
+        text = comment.find(class_='md').find('p').text if comment.find(class_='md').find('p') else UNSUPPORTED_FORMAT
+        points = comment.find('span', class_='score unvoted').text.split()[0] \
+            if comment.find('span', class_='score unvoted') else '0'
         comment_time = comment.find('time').attrs['datetime']
         sub_comments = comment.find('a', class_="numchildren").text.split()[0].replace('(', '')
-        if comment.find(class_='md').find('p'):
-            text = comment.find(class_='md').find('p').text
-        else:
-            text = 'format not supported'
+        parent_id = re.split('[-_]', comment.parent.attrs['id'])[-1]
+        child_id = re.split('[-_]', comment.attrs['id'])[-1]
+        # fix features
+        points = int(float(points[:-1]) * CONVERT_THOUSAND) if points[-1] == 'k' else points
 
-        comment_ind = {'author': author,
-                       'text': text,
-                       'points': points,
-                       'comment time': comment_time,
-                       'sub comments': sub_comments,
-                       'parent_comment_id': parent_id,
-                       'child_comment_id': child_id,
-                       'comment_post_id': comment_post_id}
-
-        comments[index] = comment_ind
+        comments.append({'author': author, 'text': text, 'points': points, 'comment time': comment_time,
+                         'sub comments': sub_comments, 'parent_comment_id': parent_id, 'child_comment_id': child_id,
+                         'comment_post_id': comment_post_id})
 
     return comments
-
-
-def cli_parser():
-
-    """
-    Gets the CLI arguments for the scraper
-    Returns
-    -------
-    arguments set by the user
-    """
-
-    parser = argparse.ArgumentParser(
-        prog='SCRAPER',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=textwrap.dedent('''
-                        --------------------------------
-                                REDDIT WEB-SCRAPER
-                        --------------------------------
-                         Use this to scrape posts, comments & user data 
-                         from any subreddit on reddit.
-                         The data will be saved in a MySQL database 
-                         '''))
-
-    parser.add_argument('username', type=str,
-                        help='Your username for your MySQL database where the scraped data will be stored',
-                        default='root')
-    parser.add_argument('password', type=str,
-                        help='Your password for your MySQL database where the scraped data will be stored', default='')
-    parser.add_argument('subreddit', type=str, help='The name of the subreddit that you want to scrape')
-    parser.add_argument('choice', type=str,
-                        help='The settings of posts selected on the subreddit page: [new, top]\nIn case of top please add "-" followed by specification of range [day, week, month, year, all]')
-    parser.add_argument('pages', type=int, help='The number of pages to scrape, there are 25 posts on each page')
-
-    args = parser.parse_args()
-    return args
 
 
 def get_sentiment(text, key):
     """
     Gets the positive and negative sentiment of a post from reddit
+
     Parameters
     ----------
     text : text to analyse and get the sentiment
@@ -377,92 +382,100 @@ def get_sentiment(text, key):
 
     Returns
     -------
-    tuple of the positive and negative sentiment for the text
+    tuple of the positive, neutral and negative sentiment for the text
     """
-
-    API_URL = "https://api-inference.huggingface.co/models/finiteautomata/beto-sentiment-analysis"
     headers = {"Authorization": f"Bearer {key}"}
+    output = requests.post(API_URL, headers=headers, json={"inputs": text}).json()[0]
 
-    def query(payload):
-        response = requests.post(API_URL, headers=headers, json=payload)
-        return response.json()
-
-    output = query({"inputs": text})
-
-    positive = output[0][0]['score']
-    neutral = output[0][1]['score']
-    negative = output[0][2]['score']
-
-    return negative, neutral, positive
+    return output[0]['score'], output[1]['score'], output[2]['score']
 
 
-def main(connection):
+# ----- scraping functions -----
+def scrape_page(soup, connection):
+    """
+    scrapes and stores contents of subreddit page
+
+    Parameters
+    ----------
+    soup : soup object of page on subreddit
+    connection : SQL connection
+    """
     users = {}
 
-    # for index, channel in enumerate(CHANNELS):
-    posts_data = []
+    for post in soup.select('div[class*="thing"]'):
+        # check that the post is not promotional or an announcement, we only want real posts
+        not_promotion = post.find('span', class_="promoted-span") is None
+        not_announcement = post.find('span', class_="stickied-tagline") is None
+        if not_promotion and not_announcement:
+            # check if we have scraped this user in this session, if not then get their data
+            username = post.select('a[class*="author"]')[0].text
+            if username not in users.keys():  # if user was not scraped recently
+                users[username] = get_user_data(post.select('a[class*="author"]')[0].attrs['href'])
+                user_id = insert_user(users, connection)
+            else:  # if user is scraped already, get user_id from DB
+                with connection.cursor() as cursor:
+                    sql = f"""select user_id from user where user_name = '{username}';"""
+                    cursor.execute(sql)
+                    user_id = cursor.fetchone()[0]
 
-    # get the URL for the subreddit that will be scraped and create a soup object
-    # choice_list = CHOICE.split('-')
-    # choice_url = choice_list[0] if len(choice_list) == 1 else f'{choice_list[0]}/?t={choice_list[1]}'
-    # full_url = f'{BASE_URL}r/{SUBREDDIT}/{choice_url}'
-    choice_url = CHOICE if TIMEFRAME is None else f'{CHOICE}/?t={TIMEFRAME}'
-    full_url = f'{BASE_URL}r/{SUBREDDIT}/{choice_url}'
-    print(f'scraping {full_url}')
-    page = requests.get(full_url, headers=HEADERS)
+            post_data = get_post_data(post, view=arg_choice, user_id=user_id)
+            insert_post(post_data, connection)
+
+
+def scrape_subreddit(connection):
+    """
+    scrapes and stores contents of subreddit
+
+    Parameters
+    ----------
+    connection : connection to SQL database
+    """
+    choice_url = arg_choice if arg_timeframe is None else f'{arg_choice}/?t={arg_timeframe}'
+    main_page_url = f'{BASE_URL}r/{arg_subreddit}/{choice_url}'
+    print(f'scraping {main_page_url}')
+
+    page = requests.get(main_page_url, headers=HEADERS)
     soup = BeautifulSoup(page.content, 'html.parser')
 
-    counter = 0
-    while counter < PAGES:
-        # search for each "thing" which is a post/comment in the HTML
-        for post in soup.select('div[class*="thing"]'):
-            # check that the post is not promotional or an announcement, we only want real posts
-            not_promotion = post.find('span', class_="promoted-span") is None
-            not_announcement = post.find('span', class_="stickied-tagline") is None
-            if not_promotion and not_announcement:
-                # get the username of the poster
-                username = post.select('a[class*="author"]')[0].text
-                # check if we have scraped this user in this session, if not then get their data
-                if username not in users.keys():
-                    # get the data for the user
-                    users[username] = get_user_data(post.select('a[class*="author"]')[0].attrs['href'])
-                    # insert the user data into SQL
-                    user_id = user_insert_to_sql(users, connection)
-                    # insert the user's posts data into SQL
-                    insert_user_post_to_sql(users, user_id, connection)
+    for i in range(arg_pages):
+        if soup:
+            scrape_page(soup, connection)
 
-                else:
-                    # if got the user already, get their user_id from the SQL db
-                    with connection.cursor() as cursor:
-                        # Read a single record
-                        sql = f"""select user_id from user where user_name = '{username}';"""
-                        cursor.execute(sql)
-                        user_id = cursor.fetchone()[0]
-
-                # Get the post data
-                post_data = get_post_data(post)
-                post_data['subreddit'] = SUBREDDIT
-                post_data['user_id'] = user_id
-                post_data['post_option'] = CHOICE
-                post_data['post_source'] = 'subreddit'
-                # get all the comments of the post
-                post_comments = get_comments(post) if int(post_data['comments']) > 0 else None
-                post_data['post comments'] = post_comments
-
-                posts_data.append(post_data)
-                # insert the post and its comments into the SQL db
-                insert_to_sql(post_data, connection)
-
-        # get the next page
+        # get the next page, return None if there are no more pages
         soup = get_next_page(soup)
-        counter += 1
 
     print('Done scraping!')
 
 
-if __name__ == '__main__':
+# ----- CLI functions -----
+def cli_parser():
+    """
+    Gets the CLI arguments for the scraper
 
-    args = cli_parser()
+    Returns
+    -------
+    arguments set by the user
+    """
+
+    parser = argparse.ArgumentParser(prog='SCRAPER', formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     description=CLI_DESCRIPTION)
+
+    parser.add_argument('username', type=str, help=CLI_USERNAME_HELP, default='root')
+    parser.add_argument('password', type=str, help=CLI_PASSWORD_HELP, default='root')
+    parser.add_argument('subreddit', type=str, help=CLI_SUBREDDIT_HELP)
+    parser.add_argument('choice', type=str, help=CLI_CHOICE_HELP, default='top-week')
+    parser.add_argument('pages', type=int, help=CLI_PAGES_HELP, default=5)
+
+    return parser.parse_args()
+
+
+def validate_args(args):
+    """
+    validates CLI arguments, if invalid stop the program
+    Parameters
+    ----------
+    args : CLI arguments
+    """
     # check number of arguments inserted is valid (.py file is argument too)
     if len(sys.argv) < 6:
         print(f'{6 - len(sys.argv)} missing arguments. expected 5 arguments')
@@ -471,8 +484,8 @@ if __name__ == '__main__':
         print(f'{len(sys.argv) - 6} extra arguments. expected 5 arguments')
         sys.exit()
     # check if subreddit exists
-    full_url = f'{BASE_URL}r/{args.subreddit}'
-    if not requests.get(full_url, headers=HEADERS):
+    subreddit_url = f'{BASE_URL}r/{args.subreddit}'
+    if not requests.get(subreddit_url, headers=HEADERS):
         print(f'subreddit {args.subreddit} doesn\'t exist, please type a valid one')
         sys.exit()
     # check if choice argument is valid
@@ -484,31 +497,34 @@ if __name__ == '__main__':
         print('do not enter any specification if you want to scrape new posts\nformat is: new')
         sys.exit()
     if choice_list[0] == 'top' and len(choice_list) == 1:
-        print(
-            'please enter specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
+        print('please enter specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
         sys.exit()
     if choice_list[0] == 'top' and choice_list[1] not in ['day', 'week', 'month', 'year', 'all']:
-        print(
-            f'{choice_list[1]} is not valid. please enter valid specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
+        print(f'{choice_list[1]} is not valid. please enter valid specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
         sys.exit()
     # check if number of pages is valid
     if args.pages < 1:
         print(f'{args.pages} is invalid. please enter a positive integer number of pages to scrape')
         sys.exit()
 
-    USER_NAME = args.username
-    PASSWORD = args.password
-    PAGES = args.pages
-    SUBREDDIT = args.subreddit
-    CHOICE = args.choice.split('-')[0]
-    TIMEFRAME = None if len(args.choice.split('-')) == 1 else args.choice.split('-')[1]
 
-    connection = pymysql.connect(host='localhost',
-                                 user=USER_NAME,
-                                 password=PASSWORD,
-                                 database='reddit_data')
+if __name__ == '__main__':
+    CLI_args = cli_parser()
+    validate_args(CLI_args)
+
+    arg_user_name = CLI_args.username
+    arg_password = CLI_args.password
+    arg_pages = CLI_args.pages
+    arg_subreddit = CLI_args.subreddit
+    arg_choice = CLI_args.choice.split('-')[0]
+    arg_timeframe = None if len(CLI_args.choice.split('-')) == 1 else CLI_args.choice.split('-')[1]
+
+    sql_connection = pymysql.connect(host='localhost',
+                                     user=arg_user_name,
+                                     password=arg_password,
+                                     database='reddit_data')
 
     print('connection to SQL server - success')
-    main(connection)
+    scrape_subreddit(sql_connection)
 
-    connection.close()
+    sql_connection.close()
