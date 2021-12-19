@@ -482,7 +482,6 @@ def scrape_subreddit(connection):
 
         # get the next page, return None if there are no more pages
         soup = get_next_page(soup)
-
     logging.info('scraping done!')
 
 
@@ -536,16 +535,53 @@ def validate_args(args):
         print('do not enter any specification if you want to scrape new posts\nformat is: new')
         sys.exit()
     if choice_list[0] == 'top' and len(choice_list) == 1:
-        print('please enter specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
+        print(
+            'please enter specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
         sys.exit()
     if choice_list[0] == 'top' and choice_list[1] not in ['day', 'week', 'month', 'year', 'all']:
-        print(f'{choice_list[1]} is not valid. please enter valid specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
+        print(
+            f'{choice_list[1]} is not valid. please enter valid specification for scraping top: [day, week, month, year, all]\nFormat is: top-[specification]')
         sys.exit()
     # check if number of pages is valid
     if args.pages < 1:
         print(f'{args.pages} is invalid. please enter a positive integer number of pages to scrape')
         sys.exit()
     logging.info('CLI args validated')
+
+
+def make_connection(host_name, db_name, username, password):
+    """
+    Creates a connection to the MySQL database returns the connection object
+    Parameters
+    ----------
+    host_name : name of where the database is located
+    db_name : name of the database
+    username : username for MySQL
+    password : password for MySQL
+
+    Returns
+    -------
+    conn
+    """
+    try:
+        conn = pymysql.connect(host=host_name, user=username, password=password, database=db_name)
+    except pymysql.OperationalError as e:
+        logging.warning('failed to connect to SQL')
+        raise e
+    else:
+        logging.info('connection to SQL server - success')
+        print('connected')
+    return conn
+
+
+def main():
+    # create the connection to the SQL database
+    sql_connection = make_connection(host_name='localhost', db_name='reddit_data', username=arg_user_name,
+                                     password=arg_password)
+    # do all the scraping
+    scrape_subreddit(sql_connection)
+    # close the SQL connection
+    sql_connection.close()
 
 
 if __name__ == '__main__':
@@ -559,12 +595,8 @@ if __name__ == '__main__':
     arg_choice = CLI_args.choice.split('-')[0]
     arg_timeframe = None if len(CLI_args.choice.split('-')) == 1 else CLI_args.choice.split('-')[1]
 
-    sql_connection = pymysql.connect(host='localhost',
-                                     user=arg_user_name,
-                                     password=arg_password,
-                                     database='reddit_data')
-    logging.info('connection to SQL server - success')
+    main()
+    print('Done !!!')
 
-    scrape_subreddit(sql_connection)
 
-    sql_connection.close()
+
